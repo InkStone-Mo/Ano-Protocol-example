@@ -37,10 +37,8 @@
    If you'd rather not, just change the below entries to strings with
    the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
 */
-//#define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
-#define EXAMPLE_ESP_WIFI_SSID      "not_wifi"
-//#define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
-#define EXAMPLE_ESP_WIFI_PASS      "2686845934"
+#define EXAMPLE_ESP_WIFI_SSID      "xxxx"   //在此替换成你wifi的名称
+#define EXAMPLE_ESP_WIFI_PASS      "xxxx" //在此替换成你wifi的密码
 #define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
 
 #if CONFIG_ESP_WPA3_SAE_PWE_HUNT_AND_PECK
