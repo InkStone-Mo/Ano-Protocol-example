@@ -14,7 +14,11 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "nvs_flash.h"
+#include "esp_ota_ops.h"
+#include "esp_flash_partitions.h"
+#include "esp_partition.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
@@ -199,7 +203,7 @@ static void udp_server_task(void *pvParameters)
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
             break;
         }
-        ESP_LOGI(TAG, "Socket created");
+        // ESP_LOGI(TAG, "Socket created");
 
         int enable = 1;
         lwip_setsockopt(sock, IPPROTO_IP, IP_PKTINFO, &enable, sizeof(enable));
@@ -214,17 +218,17 @@ static void udp_server_task(void *pvParameters)
         if (err < 0) {
             ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
         }
-        ESP_LOGI(TAG, "Socket bound, port %d", PORT);
+        // ESP_LOGI(TAG, "Socket bound, port %d", PORT);
 
         socklen_t socklen = sizeof(source_addr);
 
         while (1) {
-            ESP_LOGI(TAG, "Waiting for data");
+            // ESP_LOGI(TAG, "Waiting for data");
 
             int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
             // Error occurred during receiving
             if (len < 0) {
-                ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+                // ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
                 break;
             }
             // Data received
@@ -242,7 +246,7 @@ static void udp_server_task(void *pvParameters)
         }
 
         if (sock != -1) {
-            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            // ESP_LOGE(TAG, "Shutting down socket and restarting...");
             shutdown(sock, 0);
             close(sock);
         }
@@ -275,19 +279,69 @@ void writeCmdInfo_Cb(const uint8_t *cmdInfoData, uint16_t cmdInfoDataLen)
     Ano_LogDebug("the parameter now : %d %d %04f",*(uint8_t *)parameterInfo[0].PAR_VAL, *(uint16_t *)parameterInfo[1].PAR_VAL, *(float *)parameterInfo[2].PAR_VAL);
 }
 
+static esp_ota_handle_t update_handle = 0;
+const esp_partition_t *update_partition = NULL;
+const esp_partition_t *configured;
+const esp_partition_t *running;
+
+void UpgradeStart(void)
+{
+    Ano_LogDebug("start upgrade");
+    esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
+    if (err != ESP_OK) {
+        Ano_LogErr("esp_ota_begin failed (%s)", esp_err_to_name(err));
+        return;
+    }
+}
+
+void UpgradeSave(uint8_t *upgradeData,uint16_t frameLen, uint16_t frameNumber)
+{
+    esp_err_t err;
+    Ano_LogDebug("save %d : %d",frameNumber, frameLen);
+    err = esp_ota_write( update_handle, (const void *)upgradeData, frameLen);
+    if (err != ESP_OK) {
+        Ano_LogErr("esp_ota_write failed (%s)", esp_err_to_name(err));
+        return;
+    }
+}
+
+void UpgradeEnd(void)
+{
+    esp_err_t err;
+    Ano_LogDebug("end upgrade");
+    err = esp_ota_end(update_handle);
+    if (err != ESP_OK) {
+        Ano_LogErr("esp_ota_end failed (%s)", esp_err_to_name(err));
+        return;
+    }
+
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        Ano_LogErr("esp_ota_set_boot_partition failed (%s)", esp_err_to_name(err));
+        return;
+    }
+
+    Ano_LogDebug("OTA update successful. Rebooting to apply changes...");
+    esp_restart();
+}
+
+
 void app_main(void)
 {
-    //Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+    ESP_LOGE(TAG, "this is new program! ano-protocol on esp32 udp\n");
+
+    // Initialize NVS.
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
     }
-    ESP_ERROR_CHECK(ret);
+    ESP_ERROR_CHECK( err );
 
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
-    
     wifi_init_sta();
+
+    /*****************/
     Ano_Init(transmissionChannel_CB);
     static T_DevInfo devInfo ={
             .DEV_ID = 0x08, 
@@ -298,12 +352,28 @@ void app_main(void)
             .DEVNAME = "esp32 test!"
         };
     Ano_SetDevInfo(&devInfo);
-    
+    T_AnoUpgrade myAnoUpgrade = {
+        .Ano_UpgradeStart = UpgradeStart,
+        .Ano_UpgradeSave = UpgradeSave,
+        .Ano_UpgradeEnd = UpgradeEnd,
+    };
+    Ano_UpgradeInit(&myAnoUpgrade);
+
     Ano_SetParameterInfo(parameterInfo, sizeof(parameterInfo)/sizeof(T_ParameterInfo)); // 注册参数信息
     static T_CMDInfo cmdInfo[] = {
         {{0}, {0x00,0x00,0x01},{CMD_VAL_TYPE_UINT8,0x00,0x00,0x00,0x00,0x00,0x00,0x00},{"test1"},{"is test1"},{NULL}},
         {{1}, {0x00,0x00,0x02},{CMD_VAL_TYPE_UINT8,CMD_VAL_TYPE_UINT16,CMD_VAL_TYPE_UINT32,CMD_VAL_TYPE_FLOAT,0x00,0x00,0x00,0x00},{"test2"},{"is test2"},{NULL}},
     };
     Ano_SetCmdInfo(cmdInfo, sizeof(cmdInfo)/sizeof(T_CMDInfo), writeCmdInfo_Cb);
+    
+    /*****************/
+
+    /***升级***/
+    configured = esp_ota_get_boot_partition();
+    running = esp_ota_get_running_partition();
+    update_partition = esp_ota_get_next_update_partition(NULL);
+    assert(update_partition != NULL);
+    /**********/
+
     xTaskCreate(udp_server_task, "udp_server", 4096, (void*)AF_INET, 5, NULL);
 }
